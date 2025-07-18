@@ -1,5 +1,5 @@
-import json
 import os
+import json
 from ollama import Client
 from typing import List, Dict
 
@@ -11,74 +11,49 @@ class SentimentAnalyzer:
     
     def analyze_sentiment(self, text: str) -> Dict:
         prompt = f"""
-            ### Persona ###
-            You are an expert financial analyst specializing in the Nepal Stock Exchange (NEPSE). You are objective, data-driven, and understand the nuances of financial reporting, including company performance, market trends, and regulatory announcements from bodies like SEBON.
+        Analyze the sentiment of the following financial news text related to a NEPSE stock.
+        Determine the sentiment distribution (Positive, Negative) and provide specific remarks.
 
-            ### Primary Task ###
-            Analyze the sentiment of the following financial news text concerning a NEPSE-listed company or the market in general. Your analysis should determine if the sentiment is Positive, Negative, or Neutral from an investor's perspective.
+        Return ONLY in this exact format:
+        | Sentiment       | Percentage | Remarks                                    |
+        |-----------------|------------|--------------------------------------------|
+        | Positive        | XX%        | [Specific positive aspects from the text]  |
+        | Negative        | YY%        | [Specific negative aspects from the text]  |
 
-            ### Analysis Guidelines & Rules ###
-            1.  **Identify Key Information:** First, identify the core financial facts in the text. Look for keywords related to earnings, revenue, profit, loss, dividends, expansion, debt, regulatory actions, and market performance.
-            2.  **Weigh Conflicting Information:** News can be mixed. For example, "Profit fell but beat analyst expectations." Acknowledge this nuance. The final sentiment should reflect the dominant theme or the most impactful piece of information for an investor.
-            3.  **Consider the Source and Context:** A company press release about "record growth" is different from a regulatory body announcing an investigation. The former is positive, the latter is likely negative.
-            4.  **Define Neutrality:** A neutral text is purely factual and devoid of sentiment-laden language. Examples include announcements of an Annual General Meeting (AGM) date, a change in a minor executive role, or a simple market data report without commentary.
-            5.  **Score with Justification:** Assign a sentiment score based on the scale below. Your justification is crucial as it explains your reasoning.
+        Rules:
+        1. The percentages must add up to 100%
+        2. Remarks should be concise bullet points from the text
+        3. Focus on financial indicators like profit, revenue, expenses, growth, etc.
+        4. If text is neutral, use 50%-50% distribution
 
-            ### Scoring Scale ###
-            * **+8 to +10 (Strongly Positive):** Major positive news. (e.g., record-breaking profits, large dividend declaration, successful major expansion).
-            * **+4 to +7 (Moderately Positive):** Clearly positive news. (e.g., solid profit growth, beating expectations, new product launch).
-            * **+1 to +3 (Slightly Positive):** Minor positive news or a cautiously optimistic outlook.
-            * **0 (Neutral):** Factual, non-speculative, no clear impact on investor sentiment.
-            * **-1 to -3 (Slightly Negative):** Minor negative news. (e.g., slight dip in profit, cautionary outlook).
-            * **-4 to -7 (Moderately Negative):** Clearly negative news. (e.g., significant profit decline, revenue miss, credit downgrade).
-            * **-8 to -10 (Strongly Negative):** Major negative news. (e.g., reporting a huge loss, regulatory investigation, bankruptcy fears, delisting).
-
-            ### Required Output Format ###
-            Return ONLY the following structure. Do not add any other text or explanation outside this format.
-            Give the output in a *Markdown table* format with these columns:
-
-            | Sentiment       | Percentage | Remarks (2-3 lines explaining why) |
-
-            First calculate positive % and negative % based on financial performance, and then explain clearly in remarks.
-
-
-            ### Text to Analyze ###
-            {text}
-            """
+        Text to analyze:
+        {text}
+        """
         
         try:
             response = self.client.generate(
                 model=self.model_name,
                 prompt=prompt,
-                options={'temperature': 0.2}  # Lower temperature for more deterministic results
+                options={'temperature': 0.2, 'num_ctx': 4096}
             )
-            
-            result = self._parse_response(response['response'])
-            return result
+            return self._parse_response(response['response'])
         except Exception as e:
             print(f"Error in sentiment analysis: {e}")
             return {
-                'sentiment': 'Neutral',
-                'score': 0
+                'sentiment_table': "| Sentiment       | Percentage | Remarks               |\n" +
+                                  "|-----------------|------------|-----------------------|\n" +
+                                  "| Positive        | 50%        | Neutral content       |\n" +
+                                  "| Negative        | 50%        | Neutral content       |"
             }
     
     def _parse_response(self, response_text: str) -> Dict:
-        lines = response_text.strip().split('\n')
-        sentiment = "Neutral"
-        score = 0
-        
-        for line in lines:
-            if line.startswith("Sentiment:"):
-                sentiment = line.split(":")[1].strip()
-            elif line.startswith("Sentiment Score:"):
-                try:
-                    score = int(line.split(":")[1].strip())
-                except ValueError:
-                    score = 0
+        # Extract the table part from the response
+        table_start = response_text.find("| Sentiment")
+        table_end = response_text.find("\n\n", table_start)
+        table = response_text[table_start:table_end].strip() if table_start != -1 else response_text
         
         return {
-            'sentiment': sentiment,
-            'score': score
+            'sentiment_table': table
         }
     
     def analyze_news_for_symbol(self, symbol: str) -> List[Dict]:
@@ -93,13 +68,13 @@ class SentimentAnalyzer:
         
         analyzed_news = []
         for news_item in data['news']:
-            analysis = self.analyze_sentiment(news_item['title'])
+            analysis = self.analyze_sentiment(news_item['title'] + "\n" + news_item['full_content'])
             analyzed_news.append({
                 'title': news_item['title'],
                 'link': news_item['link'],
-                'source': news_item['source'],
-                'sentiment': analysis['sentiment'],
-                'score': analysis['score']
+                'date': news_item['date'],
+                'sentiment_analysis': analysis['sentiment_table'],
+                'source': news_item['source']
             })
         
         return analyzed_news
@@ -108,32 +83,58 @@ class SentimentAnalyzer:
         if not analyzed_news:
             return f"No news analyzed for {symbol}"
         
-        positive = sum(1 for item in analyzed_news if item['sentiment'] == 'Positive')
-        negative = sum(1 for item in analyzed_news if item['sentiment'] == 'Negative')
-        neutral = sum(1 for item in analyzed_news if item['sentiment'] == 'Neutral')
+        # Calculate overall sentiment percentages
+        positive_sum = 0
+        negative_sum = 0
+        count = 0
         
-        avg_score = sum(item['score'] for item in analyzed_news) / len(analyzed_news)
+        for item in analyzed_news:
+            lines = item['sentiment_analysis'].split('\n')
+            if len(lines) >= 3:
+                positive_line = lines[2].split('|')
+                if len(positive_line) > 3:
+                    positive_pct = positive_line[2].strip().replace('%','')
+                    try:
+                        positive_sum += float(positive_pct)
+                        count += 1
+                    except ValueError:
+                        pass
+                
+                if len(lines) >= 4:
+                    negative_line = lines[3].split('|')
+                    if len(negative_line) > 3:
+                        negative_pct = negative_line[2].strip().replace('%','')
+                        try:
+                            negative_sum += float(negative_pct)
+                        except ValueError:
+                            pass
         
+        avg_positive = round(positive_sum / count) if count > 0 else 50
+        avg_negative = 100 - avg_positive
+        
+        # Generate report
         report_lines = [
             f"Sentiment Analysis Report for {symbol.upper()}",
-            "=" * 40,
+            "=" * 60,
             f"Total News Analyzed: {len(analyzed_news)}",
-            f"Positive Sentiment: {positive}",
-            f"Negative Sentiment: {negative}",
-            f"Neutral Sentiment: {neutral}",
-            f"Average Sentiment Score: {avg_score:.2f}",
+            "\nOverall Sentiment Distribution:",
+            "| Sentiment       | Percentage |",
+            "|-----------------|------------|",
+            f"| Positive        | {avg_positive}%        |",
+            f"| Negative        | {avg_negative}%        |",
             "\nDetailed Analysis:",
-            "-" * 40
+            "=" * 60
         ]
         
         for item in analyzed_news:
-            report_lines.append(
-                f"Title: {item['title']}\n"
-                f"Source: {item['source']}\n"
-                f"Sentiment: {item['sentiment']}\n"
-                f"Score: {item['score']}\n"
-                f"Link: {item['link']}\n"
-                "-" * 20
-            )
+            report_lines.extend([
+                f"\nTitle: {item['title']}",
+                f"Date: {item['date']}",
+                f"Source: {item['source']}",
+                f"Link: {item['link']}",
+                "\nSentiment Analysis:",
+                item['sentiment_analysis'],
+                "-" * 60
+            ])
         
         return "\n".join(report_lines)

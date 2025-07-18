@@ -35,19 +35,15 @@ def main():
             with open(f"{args.symbol.lower()}_sentiment_report.txt", 'w', encoding='utf-8') as f:
                 f.write(report)
         else:
-            # Just show summary
+            # Just show the sentiment table for each news item
             if not analyzed_news:
                 print(f"No news analyzed for {args.symbol}")
                 return
-            
-            positive = sum(1 for item in analyzed_news if item['sentiment'] == 'Positive')
-            negative = sum(1 for item in analyzed_news if item['sentiment'] == 'Negative')
-            neutral = sum(1 for item in analyzed_news if item['sentiment'] == 'Neutral')
-            avg_score = sum(item['score'] for item in analyzed_news) / len(analyzed_news)
-            
-            print(f"Sentiment Analysis Summary for {args.symbol.upper()}:")
-            print(f"Positive: {positive} | Negative: {negative} | Neutral: {neutral}")
-            print(f"Average Sentiment Score: {avg_score:.2f}")
+
+            for item in analyzed_news:
+                print(f"Title: {item['title']}")
+                print(item['sentiment_analysis'])
+                print("-" * 40)
 
 if __name__ == "__main__":
     main()
